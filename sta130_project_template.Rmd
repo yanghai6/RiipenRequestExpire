@@ -1,0 +1,635 @@
+---
+title: "STA130 Final Project"
+author: "Haiyue Yang, Yijing Chen, Xi Zheng(TUT0103-04)"
+subtitle: How the launch of request expiry changed user behavior
+output:
+  beamer_presentation: default
+  slidy_presentation: default
+  ioslides_presentation: default
+  widescreen: yes
+---
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+# echo=FALSE will stop the code chunk from appearing in the knit document
+# warning=FALSE and message=FALSE will stop R messages from appearing in the knit document
+library(tidyverse)
+library(lubridate)
+library(readxl)
+```
+
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+# This code chunk will run but not appear in the knit document
+# Here is a sample showing you how to read in the data
+requests <- read_excel("requests_Mar18_2019.xlsx")
+categories <- read_excel("data/categories.xlsx")
+courses <- read_excel("data/courses.xlsx")
+educatoraccounts <- read_excel("data/educatoraccounts.xlsx")
+employeraccounts <- read_excel("data/employeraccounts.xlsx")
+projects <- read_excel("data/projects.xlsx")
+studentaccounts <- read_excel("data/studentaccounts.xlsx")
+teams <- read_excel("data/teams.xlsx")
+```
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+request_type <- requests %>% 
+  mutate(type=ifelse(`Actor Id` %in% educatoraccounts$Id,educatoraccounts$Type,ifelse(`Actor Id` %in% employeraccounts$Id,employeraccounts$Type,'student'))) %>%
+  mutate(recipient_type=ifelse(`Recipient Id`%in% educatoraccounts$Id,educatoraccounts$Type,ifelse(`Actor Id` %in% employeraccounts$Id,employeraccounts$Type,'student'))) %>%
+  mutate(`Day of Created At`=as.Date(`Day of Created At`, "%d %B, %Y")) %>%
+  mutate(`Day of Updated At`=as.Date(`Day of Updated At`, "%d %B, %Y")) %>%
+  mutate(`Day of Expired At`=as.Date(`Day of Expired At`, "%d %B, %Y")) %>%
+  mutate(`Month of Created At`=substr(`Day of Created At`,1,7)) %>%
+  filter(`Day of Created At`!='2018-04-12'&`Day of Created At`!='2018-08-30')
+
+# filter out 2018-4-12 & 2018-8-30 because of extreme data
+```
+
+
+## Introduction
+
+On November 21, 2018, Riipen, a Vancouver-based education technology company, launched a new feature called "request expiry".\
+This project is going to show how user behaviour have changed after the launch of request expiry from the following perspectives. 
+
+
+## Objectives
+
+### Change in the behaviour of recipients
+- Whether the **response rate** (in 14days) changed?
+- How the **response time** has changed?
+
+### Change in the behaviour of creators
+- How the **number of requests created per day** has changed?
+- How the **number of accounts created per month** has changed?
+
+## Data Summary
+
+- mutate()&ifelse(): add the type of users into request.xlsx
+- mutate()&as.Date(): change variable types from chr to date
+- mutate()&substr(): add the month of each request created at
+- filter(): filter out data on 2018-4-12 & 2018-8-30 (extreme)
+
+## Response rate (in 14 Days)
+### State hypothesis
+**Null hypothesis**: $H_0: rate\_diff=0$\
+The response rate did not change after the November 21 launch of request expiry.\
+**Alternative hypothesis**: $H_a: rate\_diff\ne0$ \
+The response rate has changed after the November 21 launch of request expiry.
+
+### Calculate test statistic: 
+- Filter out the requests still pending
+- Summarise the response rate before and after 2018-11-21
+- Calculate the difference.
+- Test statistic (rate_diff):\
+```{r, echo=FALSE, message=FALSE, warning=FALSE, fig.height=3}
+# response rate in 14 days
+response_rate <- request_type %>%
+  filter(State!='pending') %>%
+  mutate(response_time=`Day of Updated At`-`Day of Created At`) %>%
+  mutate(rate=ifelse(response_time <= 14,1,0))
+rate_before <- response_rate %>%
+  filter(`Day of Created At`<'2018-11-21') %>%
+  summarise(mean(rate)) %>%
+  as.numeric()
+rate_after <- response_rate %>%
+  filter(`Day of Created At`>='2018-11-21') %>%
+  summarise(mean(rate)) %>%
+  as.numeric()
+rate_diff <- rate_after - rate_before
+rate_diff
+```
+
+
+## Response rate (in 14 Days)
+### Simulate under the null hypothesis
+- Shuffle the variable of the day requests created at
+- Calculate the difference between the response rate before and after 2018-11-21
+- Repeat 1000 times
+- Turn the result into a data frame and plot the data
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, fig.height=3}
+set.seed(130)
+rep <- 1000
+sim_rate <- rep(NA,rep)
+for (i in 1:rep)
+{
+  response_rate_ <- response_rate %>% mutate(`Day of Created At`=sample(`Day of Created At`))
+  rate_before_ <- response_rate_ %>%
+    filter(`Day of Created At`<'2018-11-21') %>%
+    summarise(mean(rate)) %>%
+    as.numeric()
+  rate_after_ <- response_rate_ %>%
+    filter(`Day of Created At`>='2018-11-21') %>%
+    summarise(mean(rate)) %>%
+    as.numeric()
+  sim_rate[i] <- rate_after_ - rate_before_
+}
+sim_rate <- tibble(sim_rate)
+sim_rate %>% ggplot(aes(x=sim_rate)) + 
+  geom_histogram() + 
+  geom_vline(xintercept = rate_diff, color="red") + 
+  geom_vline(xintercept=-rate_diff, color="red") +
+  labs(x='difference in response rate') +
+  ggtitle(label = "simulated sampling distribution of difference in response rate")
+```
+
+
+## Response rate (in 14 Days)
+### Assess evidence against the null hypothesis
+- Compare the test statistic to the simulated sampling distribution
+- Calculate the p-value:
+```{r, echo=FALSE, message=FALSE, warning=FALSE, fig.height=3}
+extreme_rate <- sim_rate %>%
+  filter(sim_rate>=rate_diff | sim_rate<=-rate_diff) %>%
+  summarise(n()) %>%
+  as.numeric()
+p_value_rate <- extreme_rate/rep
+p_value_rate # p-value < 0.05
+```
+### Conclusion
+p-value=0.009<0.01\
+We have strong evidence against the null hypothesis
+
+## Response rate (in 14 Days)
+### **Different types of recipients**
+```{r, echo=FALSE, message=FALSE, warning=FALSE, fig.height=3}
+response_stu <- response_rate %>% filter(recipient_type=="student")
+response_emp <- response_rate %>% filter(recipient_type=="employer")
+```
+**professor**: too few observations to draw a conclusion\
+**student**:
+
+- test statistic: stu_diff=0.1768805
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+stu_rate_before <- response_stu %>%
+  filter(`Day of Created At`<'2018-11-21') %>%
+  summarise(mean(rate)) %>%
+  as.numeric()
+stu_rate_after <- response_stu %>%
+  filter(`Day of Created At`>='2018-11-21') %>%
+  summarise(mean(rate)) %>%
+  as.numeric()
+stu_diff <- stu_rate_after - stu_rate_before
+```
+- p-value=0
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+# hypothesis test
+# H0 stu_diff=0
+set.seed(130)
+sim_stu <- rep(NA,rep)
+for (i in 1:rep)
+{
+  stu_ <- response_stu %>% mutate(`Day of Created At`=sample(`Day of Created At`))
+  s_before_ <- stu_ %>%
+    filter(`Day of Created At`<'2018-11-21') %>%
+    summarise(mean(rate)) %>%
+    as.numeric()
+  s_after_ <- stu_ %>%
+    filter(`Day of Created At`>='2018-11-21') %>%
+    summarise(mean(rate)) %>%
+    as.numeric()
+  sim_stu[i] <- s_after_ - s_before_
+}
+sim_stu <- tibble(sim_stu)
+extreme_s <- sim_stu %>%
+  filter(sim_stu >=stu_diff | sim_stu <=-stu_diff) %>%
+  summarise(n()) %>%
+  as.numeric()
+p_stu <- extreme_s/rep
+```
+- 95% confidence interval
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+# bootstrap
+set.seed(130)
+boot_stu <- rep(NA,rep)
+ns <- response_stu %>% summarise(n()) %>% as.numeric()
+for (i in 1:rep)
+{
+  bs <- response_stu %>% sample_n(size=ns,replace=TRUE)
+  bs_before <- bs %>%
+    filter(`Day of Created At`<'2018-11-21') %>%
+    summarise(mean(rate)) %>%
+    as.numeric()
+  bs_after <- bs %>%
+    filter(`Day of Created At`>='2018-11-21') %>%
+    summarise(mean(rate)) %>%
+    as.numeric()
+  boot_stu[i] <- bs_after-bs_before
+}
+boot_stu %>% quantile(c(0.025,0.975))
+```
+
+**employer**: 
+
+- test statistic: emp_diff=0.01536152
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+emp_rate_before <- response_emp %>%
+  filter(`Day of Created At`<'2018-11-21') %>%
+  summarise(mean(rate)) %>%
+  as.numeric()
+emp_rate_after <- response_emp %>%
+  filter(`Day of Created At`>='2018-11-21') %>%
+  summarise(mean(rate)) %>%
+  as.numeric()
+emp_diff <- emp_rate_after - emp_rate_before
+```
+- p-value=0.706>0.1
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+set.seed(130)
+sim_emp <- rep(NA,rep)
+for (i in 1:rep)
+{
+  emp_ <- response_emp %>% mutate(`Day of Created At`=sample(`Day of Created At`))
+  s_before_ <- emp_ %>%
+    filter(`Day of Created At`<'2018-11-21') %>%
+    summarise(mean(rate)) %>%
+    as.numeric()
+  s_after_ <- emp_ %>%
+    filter(`Day of Created At`>='2018-11-21') %>%
+    summarise(mean(rate)) %>%
+    as.numeric()
+  sim_emp[i] <- s_after_ - s_before_
+}
+sim_emp <- tibble(sim_emp)
+extreme_s <- sim_emp %>%
+  filter(sim_emp >=emp_diff | sim_emp <=-emp_diff) %>%
+  summarise(n()) %>%
+  as.numeric()
+p_emp <- extreme_s/rep# p-value>0.1
+```
+
+## Response time
+### **hypothesis test & p-value**
+- hypothesis- hypothesis\
+**Null hypothesis**: \
+The average response time did not change after the November 21 launch of request expiry.
+$$H_0: time\_diff=0$$
+**Alternative hypothesis**: \
+The average response time has changed after the November 21 launch of request expiry.
+$$H_a: time\_diff\ne0$$
+- test statistic: (time_diff)\
+```{r,echo=FALSE, message=FALSE, warning=FALSE }
+response <- request_type %>%
+  filter(`State`!='expired') %>%
+  filter(`State`!='pending') %>%
+  filter(`Day of Created At` != '2018-04-12') %>%
+  filter(`Day of Created At` != '2018-08-30')
+response$response_time <- response$`Day of Updated At` - response$`Day of Created At`
+
+# average response time each day
+time <- response %>%
+  group_by(`Day of Created At`) %>%
+  summarise(time_ave_each_day=mean(response_time))
+
+time_before <- time %>%
+  filter(`Day of Created At`<'2018-11-21') %>%
+  summarise(mean=mean(time_ave_each_day)) %>%
+  as.numeric()
+
+time_after <- time %>%
+  filter(`Day of Created At`>='2018-11-21') %>%
+  summarise(mean=mean(time_ave_each_day)) %>%
+  as.numeric()
+
+time_diff <- time_after - time_before
+time_diff
+```
+
+## Response time
+### **hypothesis test & p-value**
+```{r, echo=FALSE, message=FALSE, warning=FALSE, fig.height=3}
+set.seed(130)
+sim_time <- rep(NA,rep)
+for (i in 1:rep)
+{
+  time_ <- time %>% mutate(`Day of Created At`=sample(`Day of Created At`))
+  time_before_ <- time_ %>%
+    filter(`Day of Created At`<'2018-11-21') %>%
+    summarise(mean=mean(time_ave_each_day)) %>%
+    as.numeric()
+  time_after_ <- time_ %>%
+    filter(`Day of Created At`>='2018-11-21') %>%
+    summarise(mean=mean(time_ave_each_day)) %>%
+    as.numeric()
+  sim_time[i] <- time_after_-time_before_
+}
+sim_time <- tibble(sim_time)
+sim_time %>% ggplot(aes(x=sim_time)) + 
+  geom_histogram() + 
+  geom_vline(xintercept = time_diff, color="red") + 
+  geom_vline(xintercept=-time_diff, color="red") +
+  labs(x='difference in average response time') +
+  ggtitle(label="Simulated Sampling Distribution of the difference in average responce time")
+```
+
+- p-value
+```{r, echo=FALSE, message=FALSE, warning=FALSE, fig.height=3}
+extreme_time <- sim_time %>%
+  filter(sim_time>= abs(time_diff) | sim_time<= -abs(time_diff)) %>%
+  summarise(n()) %>%
+  as.numeric()
+p_value_time <- extreme_time/rep
+p_value_time
+```
+- conclusion\
+p-value=0\
+We have strong evidence against the null hypothesis.
+
+## Response time
+### **bootstrap sampling & confidence interval**
+### bootstrap sample
+- Draw 1000 bootstrap samples of the same size as the original sample with replacement
+- For each bootstrap sample, calculate the statistic
+- Summarise the value of statistic for all bootstrap samples 
+```{r, echo=FALSE, message=FALSE, warning=FALSE, fig.height=3}
+set.seed(130)
+boot_time <- rep(NA,rep)
+st <- time %>% summarise(n()) %>% as.numeric()
+for (i in 1:rep)
+{
+  time2 <- time %>% sample_n(size=st,replace=TRUE)
+  time_before2 <- time2 %>%
+    filter(`Day of Created At`<'2018-11-21') %>%
+    summarise(mean=mean(time_ave_each_day)) %>%
+    as.numeric()
+  time_after2 <- time2 %>%
+    filter(`Day of Created At`>='2018-11-21') %>%
+    summarise(mean=mean(time_ave_each_day)) %>%
+    as.numeric()
+  boot_time[i] <- time_after2-time_before2
+}
+bt1 <- boot_time %>% quantile(0.025) %>% as.numeric()
+bt2 <- boot_time %>% quantile(0.975) %>% as.numeric()
+boot_time <- tibble(boot_time)
+boot_time %>% ggplot(aes(x=boot_time)) + 
+  geom_histogram() +
+  geom_vline(aes(xintercept=bt1),color="blue") +
+  geom_vline(aes(xintercept=bt2),color="blue") +
+  labs(x="sample difference in average response time") +
+  ggtitle(label="bootstrap sampling distribution of the difference in avverage responce time")
+```
+
+## Response time
+### **bootstrap sampling & confidence interval**
+### 95% confidence interval
+- Calculate the middle 95% interval of values of the bootstrap statistic
+```{r, echo=FALSE, message=FALSE, warning=FALSE, fig.height=3}
+boot_time$boot_time %>% quantile(c(0.025,0.975)) # 95% confidence interva
+```
+We are 95% confident that the response time has decreased by between 9.470533 and -17.154014 days after 2018-11-21.
+
+
+## Number of requests per day
+### **clear out outliers**
+We plotted a scartter plot for number of requests created each day.\
+From the plot, we discovered an outlier at 2019-02-28 and cleared it out.
+```{r, echo=FALSE, message=FALSE, warning=FALSE, fig.height=5}
+# request each day
+num <- request_type %>%
+  group_by(`Day of Created At`) %>%
+  summarise(num=n())
+# discover an outlier at 2019-02-28
+num %>% ggplot(aes(x=`Day of Created At`,y=num)) + 
+  geom_point() + 
+  geom_point(aes(x=as.Date('2019-02-28'),y=51),color="red") +
+  labs(y='number of requests created') +
+  ggtitle(label="Number of Requests Created Each Day")
+num <- num %>% filter(`Day of Created At`!='2019-02-28') # filter out the outlier
+```
+
+## Number of requests per day
+### **hypothesis test & p-value**
+- hypothesis\
+**Null hypothesis**: \
+The number of requests created per day did not change after the November 21 launch of request expiry.
+$$H_0: num\_diff=0$$
+**Alternative hypothesis**: \
+The number of requests created per day has changed after the November 21 launch of request expiry.
+$$H_a: num\_diff\ne0$$
+- test statistic: (num_diff)\
+```{r, echo=FALSE, message=FALSE, warning=FALSE, fig.height=3}
+num_before <- num %>%
+  filter(`Day of Created At`<'2018-11-21') %>%
+  summarise(mean=mean(num)) %>%
+  as.numeric()
+num_after <- num %>%
+  filter(`Day of Created At`>='2018-11-21') %>%
+  summarise(mean=mean(num)) %>%
+  as.numeric()
+num_diff <- num_after - num_before
+num_diff
+```
+
+## Number of requests per day
+### **hypothesis test & p-value**
+```{r, echo=FALSE, message=FALSE, warning=FALSE, fig.height=4}
+# hypothesis type
+# H0: difference=0
+set.seed(130)
+sim <- rep(NA,rep)
+for (i in 1:rep)
+{
+  num_ <- num %>% mutate(`Day of Created At`=sample(`Day of Created At`))
+  num_before_ <- num_ %>%
+    filter(`Day of Created At`<'2018-11-21') %>%
+    summarise(mean=mean(num)) %>%
+    as.numeric()
+  num_after_ <- num_ %>%
+    filter(`Day of Created At`>='2018-11-21') %>%
+    summarise(mean=mean(num)) %>%
+    as.numeric()
+  sim[i] <- num_after_-num_before_
+}
+sim <- tibble(sim)
+sim %>% ggplot(aes(x=sim)) + 
+  geom_histogram() + 
+  geom_vline(xintercept = num_diff, color="red") + 
+  geom_vline(xintercept=-num_diff, color="red") +
+  labs(x='difference in average number of request each day') +
+  ggtitle(label="Simulated difference in average number of request created each day")
+```
+
+- p-value
+```{r, echo=FALSE, message=FALSE, warning=FALSE, fig.height=3}
+extreme <- sim %>%
+  filter(sim>=num_diff | sim<=-num_diff) %>%
+  summarise(n()) %>%
+  as.numeric()
+p_value <- extreme/rep
+p_value # p-value < 0.05
+```
+
+- conclusion\
+p-value=0.024<0.05\
+We have evidence against the null hypothesis.
+
+
+## Number of requests per day
+### **bootstrap sampling & confidence interval**
+- bootstrap sampling distribution:
+```{r, echo=FALSE, message=FALSE, warning=FALSE, fig.height=3}
+# bootstrap together
+set.seed(130)
+boot1 <- rep(NA,rep)
+s <- num %>% summarise(n()) %>% as.numeric()
+for (i in 1:rep)
+{
+  num2 <- num %>% sample_n(size=s,replace=TRUE)
+  num_before2 <- num2 %>%
+    filter(`Day of Created At`<'2018-11-21') %>%
+    summarise(mean=mean(num)) %>%
+    as.numeric()
+  num_after2 <- num2 %>%
+    filter(`Day of Created At`>='2018-11-21') %>%
+    summarise(mean=mean(num)) %>%
+    as.numeric()
+  boot1[i] <- num_after2-num_before2
+}
+b1 <- boot1 %>% quantile(0.025) %>% as.numeric()
+b2 <- boot1 %>% quantile(0.975) %>% as.numeric()
+boot1 <- tibble(boot1)
+boot1 %>% ggplot(aes(x=boot1)) + 
+  geom_histogram() +
+  geom_vline(aes(xintercept=b1),color="blue") +
+  geom_vline(aes(xintercept=b2),color="blue") +
+  labs(x="difference in average number of request per day") +
+  ggtitle(label="bootstrap sampling distribution of difference in average number of request per day")
+```
+- 95% confidence interval
+```{r, echo=FALSE, message=FALSE, warning=FALSE, fig.height=3}
+boot1$boot1 %>% quantile(c(0.025,0.975)) # 95% confidence interval
+```
+
+## Number of new accounts created
+### **clean up data**
+- summarise the number of accounts craeted each month
+- filter out accounts created on '2017-02-11' because it is the start date.
+- filter out accounts created in '2019-03' because the month is not complete.
+```{r, echo=FALSE, message=FALSE, warning=FALSE, fig.height=3}
+studentaccounts <- studentaccounts %>%
+  mutate(`Day of Created At`=as.Date(`Day of Created At`, "%d %B, %Y")) %>%
+  mutate(`Month of Created At`=substr(`Day of Created At`,1,7))
+employeraccounts <- employeraccounts %>%
+  mutate(`Day of Created At`=as.Date(`Day of Created At`, "%d %B, %Y")) %>%
+  mutate(`Month of Created At`=substr(`Day of Created At`,1,7))
+educatoraccounts <- educatoraccounts %>%
+  mutate(`Day of Created At`=as.Date(`Day of Created At`, "%d %B, %Y")) %>%
+  mutate(`Month of Created At`=substr(`Day of Created At`,1,7))
+stu_creat <- studentaccounts %>%
+  filter(`Day of Created At`!='2017-02-11') %>%
+  group_by(`Month of Created At`) %>%
+  summarise(stu=n())
+emp_creat <- employeraccounts %>%
+  filter(`Day of Created At`!='2017-02-11') %>%
+  group_by(`Month of Created At`) %>%
+  summarise(emp=n())
+edu_creat <- educatoraccounts %>%
+  filter(`Day of Created At`!='2017-02-11') %>%
+  group_by(`Month of Created At`) %>%
+  summarise(edu=n())
+merge1 <- merge(stu_creat,emp_creat,all=TRUE,sort=TRUE)
+account <- merge(merge1, edu_creat, all=TRUE,sort=TRUE) %>%
+  mutate(all=stu+emp+edu) %>%
+  filter(`Month of Created At`!='2019-03')
+```
+
+## Number of new accounts created
+### **hypothesis test & p-value**
+
+- hypothesis\
+**Null hypothesis**: \
+The number of accounts created each month did not change after the November 21 launch of request expiry.
+$$H_0: account\_diff=0$$
+**Alternative hypothesis**: \
+The number of accounts created each month has changed after the November 21 launch of request expiry.
+$$H_a: account\_diff\ne0$$
+- test statistic (account_diff):\
+```{r, echo=FALSE, message=FALSE, warning=FALSE, fig.height=3}
+account_before <- account %>%
+  filter(`Month of Created At`!='2018-12'&`Month of Created At`!='2019-01'&`Month of Created At`!='2019-02'&`Month of Created At`!='2019-03') %>%
+  summarise(mean(all)) %>%
+  as.numeric()
+account_after <-account %>%
+  filter(`Month of Created At`=='2018-12'|`Month of Created At`=='2019-01'|`Month of Created At`=='2019-02') %>% 
+  summarise(mean(all)) %>%
+  as.numeric() #does not inclue'2019-03'
+account_diff <- account_after-account_before
+account_diff
+```
+
+## Number of new accounts created
+### **hypothesis test & p-value**
+```{r, echo=FALSE, message=FALSE, warning=FALSE, fig.height=3}
+set.seed(130)
+sim_act <- rep(NA,rep)
+for (i in 1:rep)
+{
+  account_ <- account %>% mutate(`Month of Created At`=sample(`Month of Created At`))
+  account_before_ <- account_ %>%
+    filter(`Month of Created At`!='2018-12'&`Month of Created At`!='2019-01'&`Month of Created At`!='2019-02'&`Month of Created At`!='2019-03') %>%
+    summarise(mean(all)) %>%
+    as.numeric()
+  account_after_ <-account_ %>%
+    filter(`Month of Created At`=='2018-12'|`Month of Created At`=='2019-01'|`Month of Created At`=='2019-02') %>% 
+    summarise(mean(all)) %>%
+    as.numeric() #does not inclue'2019-03'
+  sim_act[i] <- account_after_-account_before_
+}
+sim_act <- tibble(sim_act)
+sim_act %>% ggplot(aes(x=sim_act)) + 
+  geom_histogram() + 
+  geom_vline(xintercept = account_diff, color="red") + 
+  geom_vline(xintercept=-account_diff, color="red") +
+  labs(x='simulated difference in average number of new account created each month')
+```
+- p-value
+```{r, echo=FALSE, message=FALSE, warning=FALSE, fig.height=3}
+extreme_act <- sim_act %>%
+  filter(sim_act >=account_diff | sim_act <=-account_diff) %>%
+  summarise(n()) %>%
+  as.numeric()
+p_act <- extreme_act/rep
+p_act
+```
+- conclusion
+p-value=0.476>0.1
+We do not have evidence against the null hypothesis.
+
+## Conclusion
+### Change in Behaviour of Recipients
+**response rate**
+
+- The response rate has changed after the launch of request expiry.
+- More specifically:\
+the response rate of employers did not change;
+the response rate of students has changed, and we are 95% confident that it is increased by between 0.07873107 and 0.27436534.
+
+**response time**
+
+- The average response time has changed after the launch of request expiry.
+- We are 95% confident that the average responce time has decreased by between 9.470533 and 17.154014 days.
+
+
+## Conclusion
+### Change in Behaviour of Creators
+**number of requests each day**
+
+- The number of requests created each day has changed after the launch of request expiry.
+- We are 95% confident that the average number of requests per day has increased by between 0.1232033 and 1.7172502
+
+**number of new accounts each month**
+
+- The number of new accounts created each month did not change after the launch of request expiry.
+
+## Conclusion
+### possible explanations
+
+- The launch of request expiry has increased the response rate within 14 days and decreased the responses time, and thus improved user experience.
+- Thus,users tend to use Riipen more.
+- Since request expiry has launched only 4 months, it has not draw more new users, but is probably going to draw more users.
+
+**limitation**
+
+We did not analyze how many requests are recent after expiry, so probably the number of requests created increase simply because some requests are recent after expiry.
+
+
+
+
