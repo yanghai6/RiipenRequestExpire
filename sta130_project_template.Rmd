@@ -1,0 +1,367 @@
+---
+title: "STA130 Final Poster Project"
+author: "Haiyue Yang  Xi Zheng  Yijing Chen, TUT0103, 04"
+subtitle: The subtitle of my project
+output:
+  beamer_presentation: default
+  ioslides_presentation: default
+  widescreen: yes
+---
+
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+# echo=FALSE will stop the code chunk from appearing in the knit document
+# warning=FALSE and message=FALSE will stop R messages from appearing in the knit document
+library(tidyverse)
+library(lubridate)
+library(readxl)
+```
+
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+# This code chunk will run but not appear in the knit document
+# Here is a sample showing you how to read in the data
+requests <- read_excel("requests_Mar18_2019.xlsx")
+categories <- read_excel("data/categories.xlsx")
+courses <- read_excel("data/courses.xlsx")
+educatoraccounts <- read_excel("data/educatoraccounts.xlsx")
+employeraccounts <- read_excel("data/employeraccounts.xlsx")
+projects <- read_excel("data/projects.xlsx")
+studentaccounts <- read_excel("data/studentaccounts.xlsx")
+teams <- read_excel("data/teams.xlsx")
+```
+
+
+```{r}
+request_type <- requests %>% 
+  mutate(type=ifelse(`Actor Id` %in% educatoraccounts$Id,educatoraccounts$Type,ifelse(`Actor Id` %in% employeraccounts$Id,employeraccounts$Type,'student'))) %>%
+  mutate(recipient_type=ifelse(`Recipient Id`%in% educatoraccounts$Id,educatoraccounts$Type,ifelse(`Actor Id` %in% employeraccounts$Id,employeraccounts$Type,'student'))) %>%
+  mutate(`Day of Created At`=as.Date(`Day of Created At`, "%d %B, %Y")) %>%
+  mutate(`Day of Updated At`=as.Date(`Day of Updated At`, "%d %B, %Y")) %>%
+  mutate(`Day of Expired At`=as.Date(`Day of Expired At`, "%d %B, %Y")) %>%
+  mutate(`Month of Created At`=substr(`Day of Created At`,1,7)) %>%
+  filter(`Day of Created At`!='2018-04-12'&`Day of Created At`!='2018-08-30')
+
+# filter out 2018-4-12 & 2018-8-30 because of extreme data
+
+request_type
+```
+
+```{r}
+# request each day
+num <- request_type %>%
+  group_by(`Day of Created At`) %>%
+  summarise(num=n())
+# discover an outlier at 2019-02-28
+num %>% ggplot(aes(x=`Day of Created At`,y=num)) + 
+  geom_point() + 
+  geom_point(aes(x=as.Date('2019-02-28'),y=51),color="red") +
+  labs(y='number of requests each day')
+num <- num %>% filter(`Day of Created At`!='2019-02-28') # filter out the outlier
+
+num_before <- num %>%
+  filter(`Day of Created At`<'2018-11-21') %>%
+  summarise(mean=mean(num)) %>%
+  as.numeric()
+num_after <- num %>%
+  filter(`Day of Created At`>='2018-11-21') %>%
+  summarise(mean=mean(num)) %>%
+  as.numeric()
+num_diff <- num_after - num_before
+num_diff
+
+# hypothesis type
+# H0: difference=0
+set.seed(130)
+rep <- 1000
+sim <- rep(NA,rep)
+for (i in 1:rep)
+{
+  num_ <- num %>% mutate(`Day of Created At`=sample(`Day of Created At`))
+  num_before_ <- num_ %>%
+    filter(`Day of Created At`<'2018-11-21') %>%
+    summarise(mean=mean(num)) %>%
+    as.numeric()
+  num_after_ <- num_ %>%
+    filter(`Day of Created At`>='2018-11-21') %>%
+    summarise(mean=mean(num)) %>%
+    as.numeric()
+  sim[i] <- num_after_-num_before_
+}
+sim <- tibble(sim)
+sim %>% ggplot(aes(x=sim)) + 
+  geom_histogram() + 
+  geom_vline(xintercept = num_diff, color="red") + 
+  geom_vline(xintercept=-num_diff, color="red") +
+  labs(x='simulated difference in average number of request each day')
+extreme <- sim %>%
+  filter(sim>=num_diff | sim<=-num_diff) %>%
+  summarise(n()) %>%
+  as.numeric()
+p_value <- extreme/rep
+p_value # p-value < 0.05
+```
+
+```{r}
+# bootstrap together
+set.seed(130)
+boot1 <- rep(NA,rep)
+s <- num %>% summarise(n()) %>% as.numeric()
+for (i in 1:rep)
+{
+  num2 <- num %>% sample_n(size=s,replace=TRUE)
+  num_before2 <- num2 %>%
+    filter(`Day of Created At`<'2018-11-21') %>%
+    summarise(mean=mean(num)) %>%
+    as.numeric()
+  num_after2 <- num2 %>%
+    filter(`Day of Created At`>='2018-11-21') %>%
+    summarise(mean=mean(num)) %>%
+    as.numeric()
+  boot1[i] <- num_after2-num_before2
+}
+b1 <- boot1 %>% quantile(0.025) %>% as.numeric()
+b2 <- boot1 %>% quantile(0.975) %>% as.numeric()
+boot1 <- tibble(boot1)
+boot1 %>% ggplot(aes(x=boot1)) + 
+  geom_histogram() +
+  geom_vline(aes(xintercept=b1),color="blue") +
+  geom_vline(aes(xintercept=b2),color="blue") +
+  labs(x="sample difference in average request from bootstrap samples")
+boot1$boot1 %>% quantile(c(0.025,0.975)) # 95% confidence interval
+```
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, fig.height=3}
+# response rate in 14 days
+response_rate <- request_type %>%
+  filter(State!='pending') %>%
+  mutate(response_time=`Day of Updated At`-`Day of Created At`) %>%
+  mutate(rate=ifelse(response_time <= as_datetime(14),1,0))
+response_rate
+rate_before <- response_rate %>%
+  filter(`Day of Created At`<'2018-11-21') %>%
+  summarise(mean(rate)) %>%
+  as.numeric()
+rate_after <- response_rate %>%
+  filter(`Day of Created At`>='2018-11-21') %>%
+  summarise(mean(rate)) %>%
+  as.numeric()
+rate_diff <- rate_after - rate_before
+rate_diff
+
+# hypothesis test
+# H0:rate_diff=0
+set.seed(130)
+sim_rate <- rep(NA,rep)
+for (i in 1:rep)
+{
+  response_rate_ <- response_rate %>% mutate(`Day of Created At`=sample(`Day of Created At`))
+  rate_before_ <- response_rate_ %>%
+    filter(`Day of Created At`<'2018-11-21') %>%
+    summarise(mean(rate)) %>%
+    as.numeric()
+  rate_after_ <- response_rate_ %>%
+    filter(`Day of Created At`>='2018-11-21') %>%
+    summarise(mean(rate)) %>%
+    as.numeric()
+  sim_rate[i] <- rate_after_ - rate_before_
+}
+sim_rate <- tibble(sim_rate)
+sim_rate %>% ggplot(aes(x=sim_rate)) + 
+  geom_histogram() + 
+  geom_vline(xintercept = rate_diff, color="red") + 
+  geom_vline(xintercept=-rate_diff, color="red") +
+  labs(x='simulated difference in response rate')
+extreme_rate <- sim_rate %>%
+  filter(sim_rate>=rate_diff | sim_rate<=-rate_diff) %>%
+  summarise(n()) %>%
+  as.numeric()
+p_value_rate <- extreme_rate/rep
+p_value_rate # p-value < 0.05
+```
+
+```{r}
+response_rate %>% filter(recipient_type=="student")
+response_rate %>% filter(recipient_type=="employer")
+response_rate %>% filter(recipient_type=="professor") # observations of professors are too few to draw a conclusion
+response_stu <- response_rate %>% filter(recipient_type=="student")
+response_emp <- response_rate %>% filter(recipient_type=="employer")
+stu_rate_before <- response_stu %>%
+  filter(`Day of Created At`<'2018-11-21') %>%
+  summarise(mean(rate)) %>%
+  as.numeric()
+stu_rate_after <- response_stu %>%
+  filter(`Day of Created At`>='2018-11-21') %>%
+  summarise(mean(rate)) %>%
+  as.numeric()
+stu_diff <- stu_rate_after - stu_rate_before
+emp_rate_before <- response_emp %>%
+  filter(`Day of Created At`<'2018-11-21') %>%
+  summarise(mean(rate)) %>%
+  as.numeric()
+emp_rate_after <- response_emp %>%
+  filter(`Day of Created At`>='2018-11-21') %>%
+  summarise(mean(rate)) %>%
+  as.numeric()
+emp_diff <- emp_rate_after - emp_rate_before
+type_diff <- emp_diff - stu_diff
+type_diff
+
+# hypothesis test 
+# H0: type_diff=0
+set.seed(130)
+sim_type <- rep(NA,rep)
+for (i in 1:rep)
+{
+  type <- response_rate %>% 
+    filter(recipient_type!="professor") %>% 
+    mutate(recipient_type=sample(recipient_type))
+  stu_before <- type %>%
+    filter(recipient_type=="student") %>%
+    filter(`Day of Created At`<'2018-11-21') %>%
+    summarise(mean(rate)) %>%
+    as.numeric()
+  stu_after <- type %>%
+    filter(recipient_type=="student") %>%
+    filter(`Day of Created At`>='2018-11-21') %>%
+    summarise(mean(rate)) %>%
+    as.numeric()
+  stu <- stu_after-stu_before
+  emp_before <- type %>%
+    filter(recipient_type=="employer") %>%
+    filter(`Day of Created At`<'2018-11-21') %>%
+    summarise(mean(rate)) %>%
+    as.numeric()
+  emp_after <- type %>%
+    filter(recipient_type=="employer") %>%
+    filter(`Day of Created At`>='2018-11-21') %>%
+    summarise(mean(rate)) %>%
+    as.numeric()
+  emp <- emp_after-emp_before
+  sim_type[i] <-emp-stu
+}
+sim_type <- tibble(sim_type)
+sim_type %>% ggplot(aes(x=sim_type)) + 
+  geom_histogram() + 
+  geom_vline(xintercept = type_diff, color="red") + 
+  geom_vline(xintercept=-type_diff, color="red") +
+  labs(x='simulated difference in difference in response rate')
+extreme_type <- sim_type %>%
+  filter(sim_type>=abs(type_diff) | sim_type<=-abs(type_diff)) %>%
+  summarise(n()) %>%
+  as.numeric()
+p_value_type <- extreme_type/rep
+p_value_type # p-value < 0.05
+```
+
+```{r}
+# student_difference
+response_stu
+stu_diff
+
+# hypothesis test
+# H0 stu_diff=0
+sim_stu <- rep(NA,rep)
+for (i in 1:rep)
+{
+  stu_ <- response_stu %>% mutate(`Day of Created At`=sample(`Day of Created At`))
+  s_before_ <- stu_ %>%
+    filter(`Day of Created At`<'2018-11-21') %>%
+    summarise(mean(rate)) %>%
+    as.numeric()
+  s_after_ <- stu_ %>%
+    filter(`Day of Created At`>='2018-11-21') %>%
+    summarise(mean(rate)) %>%
+    as.numeric()
+  sim_stu[i] <- s_after_ - s_before_
+}
+```
+
+# A Section Heading on its own page
+
+## A heading that starts on a new page
+
+This document shows a few basics on making slides with R markdown.
+
+To produce the slides, Knit to HMTL (ioslides).
+
+(You can also knit to PDF if you have LaTeX installed on your computer.)
+
+
+---
+
+Three dashes starts a new page when it is not started by a new header.
+
+---
+
+### This is a heading that doesn't start a new page
+
+You can make text **bold** or in *italics*.
+
+To make bullet points, start the points after a blank line:
+ 
+- point one
+- another point
+
+
+---
+
+Include some R output
+
+```{r}
+ggplot(cars, aes(x=speed, y=dist)) + geom_point()
+```
+
+---
+
+Include the output without showing the code and R messages (which is what you want for your poster presentation).  This R code chunk also changes the size of the plot.
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, fig.height=3}
+ggplot(cars, aes(x=speed, y=dist)) + geom_point()
+```
+
+This plot shows that there is a positive relationship between distance and speed.
+
+## Read more
+
+There is more information on R markdown on the course website at [https://ntaback.github.io/UofT_STA130/Rmarkdownforclassreports.html](https://ntaback.github.io/UofT_STA130/Rmarkdownforclassreports.html)
+
+For more on creating an `ioslides` presentation see [https://rmarkdown.rstudio.com/ioslides_presentation_format.html](https://rmarkdown.rstudio.com/ioslides_presentation_format.html)
+
+# Headings you should include in your project
+
+## Introduction
+
+Include here a few sentences to introduce the problem and provide context. You might want to briefly summarize the data in words (what is the data and what is it used for). You can present the questions you are investigating here. 
+
+
+## Objectives (optional)
+
+You can list the questions of interest in complete English sentences here to highlight them. 
+
+## Data Summary (optional)
+
+Here you can explain how you cleaned the data and created variables suitable for answering your questions. 
+You can also include graphical displays that either motivated or address the questions.
+
+## Statistical Methods
+
+Describe here what you have done to the data without presenting any results (output). If you want to indicate variables by symbols or variable names, define them here. 
+
+## Results
+
+Present the main results here, in order of importance, related to the questions asked. You might use tables or graphs, or other ways to summarize your results.
+
+## Conclusion
+
+Give your main conclusions here. Follow the order of questions you presented. 
+
+Here you can also mention any additional considerations, concerns, or issues you might have. For example, if the results were unexpected, you can discuss this and perhaps offer possible explanations.
+
+## Acknowledgements (optional)
+
+If you received any help from someone other than your team members you can acknowledge them. For example:   
+*The authors thank Wei for providing information on additional data resources. The authors would like to thank "TA name" for helpful suggestions and comments that improved the presentation of this poster.*
+
+
+
